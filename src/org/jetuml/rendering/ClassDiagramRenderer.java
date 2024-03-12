@@ -23,12 +23,16 @@ package org.jetuml.rendering;
 import static java.util.stream.Collectors.toList;
 import static org.jetuml.rendering.EdgePriority.priorityOf;
 
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
+
 import org.jetuml.diagram.Diagram;
 import org.jetuml.diagram.DiagramType;
 import org.jetuml.diagram.Edge;
@@ -73,14 +77,14 @@ import javafx.scene.canvas.GraphicsContext;
  */
 public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 {
-	private static XCoordinateStrategy useX = new XCoordinateStrategy();
-	private static YCoordinateStrategy useY = new YCoordinateStrategy();
+	private static final XCoordinateStrategy useX = new XCoordinateStrategy();
+	private static final YCoordinateStrategy useY = new YCoordinateStrategy();
 	
-	private static StartNodeStrategy useStartNode = new StartNodeStrategy();
-	private static EndNodeStrategy useEndNode = new EndNodeStrategy();
+	private static final StartNodeStrategy useStartNode = new StartNodeStrategy();
+	private static final EndNodeStrategy useEndNode = new EndNodeStrategy();
 	
-	private static StartLabelStrategy useStartLabel = new StartLabelStrategy();
-	private static EndLabelStrategy useEndLabel = new EndLabelStrategy();
+	private static final StartLabelStrategy useStartLabel = new StartLabelStrategy();
+	private static final EndLabelStrategy useEndLabel = new EndLabelStrategy();
 	
 	
 	private static final int TWENTY_PIXELS = 20;
@@ -141,7 +145,105 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 		}
 		return super.getBounds();
 	}
+	
+	/**
+	 * Groups edges first by Node, then by attachedSide on that Node
+	 * @param pEdges the list of Edges which will get grouped
+	 * @param pEdgeBoundStrategy determines which Node is used for grouping
+	 * @return a nested map where lists of edges are accessed by Node and Side
+	 */
+	private Map<Node, Map<Side, List<Edge>>> groupEdgesByNodeBySide(List<Edge> pEdges, EdgeBoundStrategy pEdgeBoundStrategy) {
+		return pEdges.stream()
+				.collect(Collectors.groupingBy(edge -> pEdgeBoundStrategy.of(edge),
+						Collectors.groupingBy(edge -> attachedSide(edge, pEdgeBoundStrategy.of(edge)))
+						));
+	}
+	
+	private void printGrouping(Map<Node, Map<Side, List<Edge>>> pEdgeGroups) {
+		for (Map.Entry<Node, Map<Side, List<Edge>>> nodeEntry : pEdgeGroups.entrySet()) {
+		    Node node = nodeEntry.getKey();
+		    System.out.println("Node: " + node);
 
+		    Map<Side, List<Edge>> sideMap = nodeEntry.getValue();
+		    for (Map.Entry<Side, List<Edge>> sideEntry : sideMap.entrySet()) {
+		        Side side = sideEntry.getKey();
+		        System.out.println("  Side: " + side);
+		        
+		        List<Edge> edges = sideEntry.getValue();
+		        for (Edge edge : edges) {
+		            System.out.println("    Edge: " + edge);
+		        }
+		    }
+		}
+		System.out.println();
+	}
+	
+	private List<List<Edge>> groupEdgesToMerge(List<Edge> pEdges, EdgeLabelStrategy pEdgeLabelStrategy) {
+		assert !pEdges.isEmpty();
+		List<List<Edge>> aMergeLists = new ArrayList<>();
+		
+		List<Edge> aMergeList = new ArrayList<>();
+		aMergeList.add(pEdges.get(0));
+		
+		for (int i = 1; i < pEdges.size(); i++) {
+        	if (canMerge(pEdges.get(i), pEdges.get(i-1), pEdgeLabelStrategy)) {
+        		aMergeList.add(pEdges.get(i));
+        	} else {
+        		aMergeLists.add(aMergeList);
+        		aMergeList = new ArrayList<>();
+        		aMergeList.add(pEdges.get(i));
+        	}
+        }
+		if (!aMergeList.isEmpty())
+		{
+			aMergeLists.add(aMergeList);
+		}
+		
+        
+        return aMergeLists;
+	}
+	
+	/**
+	 * 
+	 * @param pEdges
+	 * @param pEdgeBoundStrategy
+	 * @param pMinEdgeCount the minimum number of edges required to merge
+	 * @return mergedEdges the edges which have been merged
+	 */
+	private List<Edge> mergeEdges(List<Edge> pEdges, EdgeBoundStrategy pEdgeBoundStrategy, EdgeLabelStrategy pEdgeLabelStrategy, int pMinEdgeCount) {
+		List<Edge> mergedEdges = new ArrayList<>();
+		Map<Node, Map<Side, List<Edge>>> aEdgesGroupedByNodeBySide = groupEdgesByNodeBySide(pEdges, pEdgeBoundStrategy);
+
+		for (Node aSharedNode: aEdgesGroupedByNodeBySide.keySet()) {
+		    Map<Side, List<Edge>> aEdgesGroupedBySide = aEdgesGroupedByNodeBySide.get(aSharedNode);
+		    
+		    for (Side aSharedSide: aEdgesGroupedBySide.keySet()) {	        
+		        List<Edge> aEdges = aEdgesGroupedBySide.get(aSharedSide);
+		        
+		        CoordinateStrategy coordinateStrategy = aSharedSide.isHorizontal() ? useX : useY;
+		        Comparator<Edge> positionComparator = new Comparator<Edge>() {
+					@Override
+					public int compare(Edge pEdge1, Edge pEdge2) {
+						return coordinateStrategy.of(getBounds(getOtherNode(pEdge1, aSharedNode)).getCenter()) - 
+								coordinateStrategy.of(getBounds(getOtherNode(pEdge2, aSharedNode)).getCenter());
+					}
+		        };
+		        aEdges.sort(positionComparator);
+		        List<List<Edge>> edgesToMergeLists = groupEdgesToMerge(aEdges, pEdgeLabelStrategy);
+		        for (List<Edge> edgesToMergeList: edgesToMergeLists) {
+		        	if( edgesToMergeList.size()>=pMinEdgeCount )
+					{ 	
+		        		Edge currentEdge = edgesToMergeList.get(0);
+		        		Side edgeDirection = attachedSide(currentEdge, currentEdge.start());
+						storeMergedEdges(edgeDirection, edgesToMergeList, pEdgeBoundStrategy);
+						mergedEdges.addAll(edgesToMergeList);
+					}
+		        }
+		    }
+		}
+		return mergedEdges;
+	}
+	
 	/**
 	 * Uses positional information of nodes and stored edges to layout and 
 	 * store the EdgePaths of edges in pDiagram.
@@ -152,53 +254,27 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	{
 		assert diagram().getType() == DiagramType.CLASS;
 		aEdgeStorage.clearStorage();
-		layoutSegmentedEdges(EdgePriority.INHERITANCE);
-		layoutSegmentedEdges(EdgePriority.IMPLEMENTATION);
-		layoutSegmentedEdges(EdgePriority.AGGREGATION);
-		layoutSegmentedEdges(EdgePriority.COMPOSITION);
-		layoutSegmentedEdges(EdgePriority.ASSOCIATION);
+		layoutSegmentedEdges();
 		layoutDependencyEdges();
 		layoutSelfEdges();
 	}
 	
 	/**
-	 * Plans the EdgePaths for all segmented edges with EdgePriority 
-	 * pEdgePriority.
-	 * @param pEdgePriority the edge priority level 
+	 * Plans the EdgePaths for all segmented edges
 	 * @pre pDiagram.getType() == DiagramType.CLASS
-	 * @pre EdgePriority.isSegmented(pEdgePriority)
 	 */
-	private void layoutSegmentedEdges(EdgePriority pEdgePriority)
+	private void layoutSegmentedEdges()
 	{
 		assert diagram().getType() == DiagramType.CLASS;
-		assert EdgePriority.isSegmented(pEdgePriority);
-		List<Edge> edgesToProcess = diagram().edges().stream()
-				.filter(edge -> priorityOf(edge) == pEdgePriority)
+		List<Edge> edgesToProcess = diagram().edges().stream() //A list of all segmented edges in the diagram
+				.filter(edge -> EdgePriority.isSegmented(edge))
 				.collect(toList());
 		
-		while( !edgesToProcess.isEmpty() )
-		{
-			Edge currentEdge = edgesToProcess.get(0);
-			Side edgeDirection = attachedSide(currentEdge, currentEdge.start());
-			//Get all the edges which will merge with the start or end of currentEdge
-			List<Edge> edgesToMergeStart = getEdgesToMerge(currentEdge, edgesToProcess, useStartNode, useStartLabel);
-			List<Edge> edgesToMergeEnd = getEdgesToMerge(currentEdge, edgesToProcess, useEndNode, useEndLabel);	
-			//Determine if currendEdge should merge with other edges at its start node or end node
-			if( !edgesToMergeStart.isEmpty() )
-			{ 	
-				edgesToMergeStart.add(currentEdge);
-				edgesToProcess.removeAll(edgesToMergeStart);
-				storeMergedEdges(edgeDirection, edgesToMergeStart, useStartNode);
-			}
-			else
-			{
-				edgesToMergeEnd.add(currentEdge);
-				edgesToProcess.removeAll(edgesToMergeEnd);
-				storeMergedEdges(edgeDirection, edgesToMergeEnd, useEndNode);
-			}
-		}
+		List<Edge> edgesMergedAtStart = mergeEdges(edgesToProcess, useStartNode, useStartLabel, 2);
+		edgesToProcess.removeAll(edgesMergedAtStart);
+		List<Edge> edgesMergedAtEnd = mergeEdges(edgesToProcess, useEndNode, useEndLabel, 1);
+		edgesToProcess.removeAll(edgesMergedAtEnd);
 	}
-	
 	
 	/**
 	 * Plans the EdgePaths for Dependency Edges.
@@ -381,31 +457,14 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 		return new EdgePath(pStart, firstMiddlePoint, secondMiddlePoint, pEnd);
 	}
 	
-	/**
-	 * Gets the edges which should merge to share a common start or end point with pEdge.
-	 * @param pEdge the edge of interest
-	 * @param pEdges a list of edges in the diagram
-	 * @param pEdgeBoundStrategy the strategy indicating whether to use the start node or end node of pEdge
-	 * @return a list containing the edges which should merge with pEdge (not including pEdge itself).
-	 * @pre pEdge != null
-	 * @pre pEdges != null
-	 */
-	private List<Edge> getEdgesToMerge(Edge pEdge, List<Edge> pEdges, EdgeBoundStrategy pEdgeBoundStrategy, EdgeLabelStrategy pEdgeLabelStrategy)
+	private boolean canMerge(Edge pEdge1, Edge pEdge2, EdgeLabelStrategy pEdgeLabelStrategy)
 	{
-		assert pEdge != null && pEdges != null;
-		Node aNode = pEdgeBoundStrategy.of(pEdge); //Either the start node or end node of pEdge, determined by the strategy given
-		Side aSide = attachedSide(pEdge, aNode);
-		return pEdges.stream()
-			.filter(edge -> pEdgeBoundStrategy.of(edge) == aNode)
-			.filter(edge -> priorityOf(edge) == (priorityOf(pEdge)))
-			.filter(edge -> attachedSide(edge, pEdgeBoundStrategy.of(edge)) == aSide)
-			.filter(edge -> noDifferentEdgesBetween(edge, pEdge, aNode))
-			.filter(edge -> noConflictingLabels(edge, pEdge, pEdgeLabelStrategy))
-			.filter(edge -> !edge.equals(pEdge))
-			.collect(toList());
+		assert pEdge1 != null && pEdge2 != null;
+		
+		return priorityOf(pEdge1) == priorityOf(pEdge2) && noConflictingLabels(pEdge1, pEdge2, pEdgeLabelStrategy);
+
 	}
-	
-	
+
 	/**
 	 * Gets the y-coordinate of the horizontal middle segment of pEdge.
 	 * @param pStart the start point for pEdge
