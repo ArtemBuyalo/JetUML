@@ -980,39 +980,6 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	}
 	
 	/**
-	 * Returns whether there are any edges connected to pNode in between pEdge1 and pEdge2.
-	 * @param pEdge1 an edge of interest
-	 * @param pEdge2 another edge of interest
-	 * @param pNode the node on which pEdge1 and pEdge2 are attached
-	 * @return true if there are no stored edges on pNode which are attached in between pEdge1 and pEdge2. False otherwise
-	 * @pre pEdge1.getStart() == pNode || pEdge1.getEnd() == pNode
-	 * @pre pEdge2.getStart() == pNode || pEdge2.getEnd() == pNode
-	 * @pre attachedSide(pEdge1, pNode) == attachedSide(pEdge2, pNode)
-	 */
-	private boolean noOtherEdgesBetween(Edge pEdge1, Edge pEdge2, Node pNode, Side pSide)
-	{
-		assert pEdge1.start() == pNode || pEdge1.end() == pNode;
-		assert pEdge2.start() == pNode || pEdge2.end() == pNode;
-		assert attachedSide(pEdge1, pNode) == attachedSide(pEdge2, pNode);
-		if (pEdge1.equals(pEdge2))
-		{
-			return true;
-		}
-		//Return true if there are no other stored edges connected to the same side of pNode as pEdge1 and pEdge2
-		if(aEdgeStorage.edgesConnectedTo(pNode).stream()
-					.filter(edge -> attachedSide(edge, pNode) == attachedSide(pEdge1, pNode))
-					.collect(toList()).isEmpty()) 
-		{
-			return true;
-		}
-		else
-		{	//Compare the center point of pNode to the center points of the other nodes of pEdge1 and pEdge2:
-			return nodesOnSameSideOfCommonNode(getOtherNode(pEdge1, pNode), getOtherNode(pEdge2, pNode), 
-					pNode, attachedSide(pEdge1, pNode));
-		}
-	}
-	
-	/**
 	 * Returns whether the center points of pNode1 and pNode2 are both on the same side relative to the center point of pCommonNode.
 	 * @param pNode1 a node in the diagram
 	 * @param pNode2 another node in the diagram
