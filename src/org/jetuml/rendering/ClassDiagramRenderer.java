@@ -24,7 +24,6 @@ import static java.util.stream.Collectors.toList;
 import static org.jetuml.rendering.EdgePriority.priorityOf;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -52,13 +51,13 @@ import org.jetuml.diagram.nodes.ClassNode;
 import org.jetuml.diagram.nodes.InterfaceNode;
 import org.jetuml.diagram.nodes.PackageDescriptionNode;
 import org.jetuml.diagram.nodes.PackageNode;
+import org.jetuml.geom.CoordinateStrategy;
 import org.jetuml.geom.Direction;
 import org.jetuml.geom.EdgePath;
 import org.jetuml.geom.Line;
 import org.jetuml.geom.Point;
 import org.jetuml.geom.Rectangle;
 import org.jetuml.geom.Side;
-import org.jetuml.geom.CoordinateStrategy;
 import org.jetuml.geom.XCoordinateStrategy;
 import org.jetuml.geom.YCoordinateStrategy;
 import org.jetuml.rendering.edges.EdgeStorage;
@@ -147,30 +146,35 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	}
 	
 	/**
-	 * Groups edges first by Node, then by attachedSide on that Node
+	 * Groups edges first by Node, then by attachedSide on that Node.
 	 * @param pEdges the list of Edges which will get grouped
 	 * @param pEdgeBoundStrategy determines which Node is used for grouping
-	 * @return a nested map where lists of edges are accessed by Node and Side
+	 * @return a nested map where lists of edges are accessed first by Node and then by Side
 	 */
-	private Map<Node, Map<Side, List<Edge>>> groupEdgesByNodeBySide(List<Edge> pEdges, EdgeBoundStrategy pEdgeBoundStrategy) {
+	private Map<Node, Map<Side, List<Edge>>> groupEdgesByNodeBySide(List<Edge> pEdges, EdgeBoundStrategy pEdgeBoundStrategy)
+	{
 		return pEdges.stream()
 				.collect(Collectors.groupingBy(edge -> pEdgeBoundStrategy.of(edge),
 						Collectors.groupingBy(edge -> attachedSide(edge, pEdgeBoundStrategy.of(edge)))
 						));
 	}
 	
-	private void printGrouping(Map<Node, Map<Side, List<Edge>>> pEdgeGroups) {
-		for (Map.Entry<Node, Map<Side, List<Edge>>> nodeEntry : pEdgeGroups.entrySet()) {
+	private void printGrouping(Map<Node, Map<Side, List<Edge>>> pEdgeGroups)
+	{
+		for (Map.Entry<Node, Map<Side, List<Edge>>> nodeEntry : pEdgeGroups.entrySet())
+		{
 		    Node node = nodeEntry.getKey();
 		    System.out.println("Node: " + node);
 
 		    Map<Side, List<Edge>> sideMap = nodeEntry.getValue();
-		    for (Map.Entry<Side, List<Edge>> sideEntry : sideMap.entrySet()) {
+		    for (Map.Entry<Side, List<Edge>> sideEntry : sideMap.entrySet())
+		    {
 		        Side side = sideEntry.getKey();
 		        System.out.println("  Side: " + side);
 		        
 		        List<Edge> edges = sideEntry.getValue();
-		        for (Edge edge : edges) {
+		        for (Edge edge : edges)
+		        {
 		            System.out.println("    Edge: " + edge);
 		        }
 		    }
@@ -178,17 +182,38 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 		System.out.println();
 	}
 	
-	private List<List<Edge>> groupEdgesToMerge(List<Edge> pEdges, EdgeLabelStrategy pEdgeLabelStrategy) {
+	/**
+	 * Determines if two Edges can be merged together.
+	 * @param pEdge1 an Edge
+	 * @param pEdge2 a second Edge
+	 * @param pEdgeLabelStrategy indicates whether to compare the start or end labels of the edges
+	 * @return true if pEdge1 and pEdge2 can be merged together. False otherwise
+	 * @pre pEdge1 != null && pEdge2 != null
+	 * @pre !pEdge1.equals(pEdge2)
+	 */
+	private boolean samePriorityAndNoConflictingLabels(Edge pEdge1, Edge pEdge2, EdgeLabelStrategy pEdgeLabelStrategy)
+	{
+		assert pEdge1 != null && pEdge2 != null;
+		assert !pEdge1.equals(pEdge2);
+		return priorityOf(pEdge1) == priorityOf(pEdge2) && noConflictingLabels(pEdge1, pEdge2, pEdgeLabelStrategy);
+	}
+	
+	private List<List<Edge>> groupEdgesToMerge(List<Edge> pEdges, EdgeLabelStrategy pEdgeLabelStrategy)
+	{
 		assert !pEdges.isEmpty();
 		List<List<Edge>> aMergeLists = new ArrayList<>();
 		
 		List<Edge> aMergeList = new ArrayList<>();
 		aMergeList.add(pEdges.get(0));
 		
-		for (int i = 1; i < pEdges.size(); i++) {
-        	if (canMerge(pEdges.get(i), pEdges.get(i-1), pEdgeLabelStrategy)) {
+		for (int i = 1; i < pEdges.size(); i++)
+		{
+        	if (samePriorityAndNoConflictingLabels(pEdges.get(i), pEdges.get(i-1), pEdgeLabelStrategy))
+        	{
         		aMergeList.add(pEdges.get(i));
-        	} else {
+        	}
+        	else
+        	{
         		aMergeLists.add(aMergeList);
         		aMergeList = new ArrayList<>();
         		aMergeList.add(pEdges.get(i));
@@ -210,28 +235,34 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	 * @param pMinEdgeCount the minimum number of edges required to merge
 	 * @return mergedEdges the edges which have been merged
 	 */
-	private List<Edge> mergeEdges(List<Edge> pEdges, EdgeBoundStrategy pEdgeBoundStrategy, EdgeLabelStrategy pEdgeLabelStrategy, int pMinEdgeCount) {
+	private List<Edge> mergeEdges(List<Edge> pEdges, EdgeBoundStrategy pEdgeBoundStrategy, EdgeLabelStrategy pEdgeLabelStrategy, int pMinEdgeCount)
+	{
 		List<Edge> mergedEdges = new ArrayList<>();
 		Map<Node, Map<Side, List<Edge>>> aEdgesGroupedByNodeBySide = groupEdgesByNodeBySide(pEdges, pEdgeBoundStrategy);
 
-		for (Node aSharedNode: aEdgesGroupedByNodeBySide.keySet()) {
+		for (Node aSharedNode: aEdgesGroupedByNodeBySide.keySet())
+		{
 		    Map<Side, List<Edge>> aEdgesGroupedBySide = aEdgesGroupedByNodeBySide.get(aSharedNode);
 		    
-		    for (Side aSharedSide: aEdgesGroupedBySide.keySet()) {	        
+		    for (Side aSharedSide: aEdgesGroupedBySide.keySet())
+		    {	        
 		        List<Edge> aEdges = aEdgesGroupedBySide.get(aSharedSide);
 		        
 		        CoordinateStrategy coordinateStrategy = aSharedSide.isHorizontal() ? useX : useY;
-		        Comparator<Edge> positionComparator = new Comparator<Edge>() {
+		        Comparator<Edge> positionComparator = new Comparator<Edge>()
+		        {
 					@Override
-					public int compare(Edge pEdge1, Edge pEdge2) {
+					public int compare(Edge pEdge1, Edge pEdge2)
+					{
 						return coordinateStrategy.of(getBounds(getOtherNode(pEdge1, aSharedNode)).getCenter()) - 
 								coordinateStrategy.of(getBounds(getOtherNode(pEdge2, aSharedNode)).getCenter());
 					}
 		        };
 		        aEdges.sort(positionComparator);
 		        List<List<Edge>> edgesToMergeLists = groupEdgesToMerge(aEdges, pEdgeLabelStrategy);
-		        for (List<Edge> edgesToMergeList: edgesToMergeLists) {
-		        	if( edgesToMergeList.size()>=pMinEdgeCount )
+		        for (List<Edge> edgesToMergeList: edgesToMergeLists)
+		        {
+		        	if(edgesToMergeList.size()>=pMinEdgeCount)
 					{ 	
 		        		Edge currentEdge = edgesToMergeList.get(0);
 		        		Side edgeDirection = attachedSide(currentEdge, currentEdge.start());
@@ -260,7 +291,7 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	}
 	
 	/**
-	 * Plans the EdgePaths for all segmented edges
+	 * Plans the EdgePaths for all segmented edges.
 	 * @pre pDiagram.getType() == DiagramType.CLASS
 	 */
 	private void layoutSegmentedEdges()
@@ -455,14 +486,6 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 			secondMiddlePoint = new Point(pMidLine, pEnd.getY());
 		}
 		return new EdgePath(pStart, firstMiddlePoint, secondMiddlePoint, pEnd);
-	}
-	
-	private boolean canMerge(Edge pEdge1, Edge pEdge2, EdgeLabelStrategy pEdgeLabelStrategy)
-	{
-		assert pEdge1 != null && pEdge2 != null;
-		
-		return priorityOf(pEdge1) == priorityOf(pEdge2) && noConflictingLabels(pEdge1, pEdge2, pEdgeLabelStrategy);
-
 	}
 
 	/**
@@ -898,7 +921,8 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 		}
 	}
 	
-	private int getCoordinateOfOtherNode(Edge pEdge, Node pNode, Side pAttachedSide) {
+	private int getCoordinateOfOtherNode(Edge pEdge, Node pNode, Side pAttachedSide)
+	{
 		CoordinateStrategy aCoordinateStrategy = pAttachedSide.isHorizontal() ? useX : useY;
 		return aCoordinateStrategy.of(getBounds(getOtherNode(pEdge, pNode)).getCenter());
 	}
@@ -910,7 +934,8 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	 * @param pUpperBound
 	 * @return true if the integer is larger than the lower bound and smaller than the upper bound
 	 */
-	private boolean isBetween(int pLowerBound, int pInt, int pUpperBound) {
+	private boolean isBetween(int pLowerBound, int pInt, int pUpperBound)
+	{
 		return pLowerBound < pInt && pInt < pUpperBound;
 	}
 	
@@ -919,7 +944,7 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	 * @param pEdge1 an edge of interest
 	 * @param pEdge2 another edge of interest
 	 * @param pNode the node on which pEdge1 and pEdge2 are attached
-	 * @return true if there are no edges on pNode which are attached in between pEdge1 and pEdge2, false otherwise
+	 * @return true if there are no edges on pNode which are attached in between pEdge1 and pEdge2. False otherwise
 	 * @pre pEdge1.getStart() == pNode || pEdge1.getEnd() == pNode
 	 * @pre pEdge2.getStart() == pNode || pEdge2.getEnd() == pNode
 	 * @pre attachedSide(pEdge1, pNode) == attachedSide(pEdge2, pNode)
@@ -959,7 +984,7 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	 * @param pEdge1 an edge of interest
 	 * @param pEdge2 another edge of interest
 	 * @param pNode the node on which pEdge1 and pEdge2 are attached
-	 * @return true if there are no stored edges on pNode which are attached in between pEdge1 and pEdge2, false otherwise
+	 * @return true if there are no stored edges on pNode which are attached in between pEdge1 and pEdge2. False otherwise
 	 * @pre pEdge1.getStart() == pNode || pEdge1.getEnd() == pNode
 	 * @pre pEdge2.getStart() == pNode || pEdge2.getEnd() == pNode
 	 * @pre attachedSide(pEdge1, pNode) == attachedSide(pEdge2, pNode)
@@ -1141,7 +1166,7 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	 * Returns whether pEdge is an outgoing edge from pNode.
 	 * @param pEdge the edge of interest
 	 * @param pNode the node of interest
-	 * @return true if pEdge is outgoing from pNode, false otherwise
+	 * @return true if pEdge is outgoing from pNode. False otherwise
 	 * @pre pNode!=null
 	 * @pre pEdge!=null
 	 */
@@ -1330,7 +1355,7 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	 * @param pEdge the edge of interest
 	 * @param pNode a node attached to pEdge 
 	 * @param pAttachedSide the side of pNode where pEdge is attached
-	 * @return true if pEdge's other node is closer to pNode than pEdge's middle segment is, false otherwise.
+	 * @return true if pEdge's other node is closer to pNode than pEdge's middle segment is. False otherwise.
 	 * @pre pEdge.getStart() == pNode || pEdge.getEnd() == pNode
 	 */
 	private boolean nodeIsCloserThanSegment(Edge pEdge, Node pNode, Side pAttachedSide)
