@@ -85,6 +85,10 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	private static final StartLabelStrategy useStartLabel = new StartLabelStrategy();
 	private static final EndLabelStrategy useEndLabel = new EndLabelStrategy();
 	
+	private static final List<Edge> aMergedEdges = new ArrayList<>();
+	
+	private static final Map<EdgeGroup, Point> aSharedConnectionPoints = new HashMap<EdgeGroup, Point>(); //Point shared by Edges in an EdgeGroup (an EdgeGroup CAN consist of a single Edge)
+	private static final Map<Edge, Point> aIndividualConnectionPoints = new HashMap<Edge, Point>(); //Point which is used by a single Edge
 	
 	private static final int TWENTY_PIXELS = 20;
 	private static final int TEN_PIXELS = 10;
@@ -198,81 +202,88 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 		return priorityOf(pEdge1) == priorityOf(pEdge2) && noConflictingLabels(pEdge1, pEdge2, pEdgeLabelStrategy);
 	}
 	
-	private List<List<Edge>> groupEdgesToMerge(List<Edge> pEdges, EdgeLabelStrategy pEdgeLabelStrategy)
+	/**
+	 * Parses through a list of Edges and groups together Edges which can be merged.
+	 * @param pEdges a list of Edges
+	 * @param pEdgeLabelStrategy indicates whether to compare the start or end labels of the edges
+	 * @return a list of Edge lists. All Edges in each nested list can be merged together
+	 */
+	private List<EdgeGroup> groupEdgesToMerge(List<Edge> pEdges, EdgeLabelStrategy pEdgeLabelStrategy)
 	{
 		assert !pEdges.isEmpty();
-		List<List<Edge>> aMergeLists = new ArrayList<>();
+		List<EdgeGroup> aMergeLists = new ArrayList<>();
 		
-		List<Edge> aMergeList = new ArrayList<>();
+		EdgeGroup aMergeList = new EdgeGroup();
 		aMergeList.add(pEdges.get(0));
 		
 		for (int i = 1; i < pEdges.size(); i++)
 		{
-        	if (samePriorityAndNoConflictingLabels(pEdges.get(i), pEdges.get(i-1), pEdgeLabelStrategy))
+			Edge currentEdge = pEdges.get(i);
+			Edge previousEdge = pEdges.get(i-1);
+        	if (samePriorityAndNoConflictingLabels(currentEdge, previousEdge, pEdgeLabelStrategy) &&
+        			!aMergedEdges.contains(currentEdge) && !aMergedEdges.contains(previousEdge))
         	{
-        		aMergeList.add(pEdges.get(i));
+        		aMergeList.add(currentEdge);
         	}
         	else
         	{
         		aMergeLists.add(aMergeList);
-        		aMergeList = new ArrayList<>();
-        		aMergeList.add(pEdges.get(i));
+        		aMergeList = new EdgeGroup();
+        		aMergeList.add(currentEdge);
         	}
         }
 		if (!aMergeList.isEmpty())
 		{
 			aMergeLists.add(aMergeList);
 		}
-		
-        
         return aMergeLists;
 	}
 	
-	/**
-	 * 
-	 * @param pEdges
-	 * @param pEdgeBoundStrategy
-	 * @param pMinEdgeCount the minimum number of edges required to merge
-	 * @return mergedEdges the edges which have been merged
-	 */
-	private List<Edge> mergeEdges(List<Edge> pEdges, EdgeBoundStrategy pEdgeBoundStrategy, EdgeLabelStrategy pEdgeLabelStrategy, int pMinEdgeCount)
+	private void planConnectionPoints(List<Edge> pEdges, EdgeBoundStrategy pEdgeBoundStrategy, EdgeLabelStrategy pEdgeLabelStrategy)
 	{
-		List<Edge> mergedEdges = new ArrayList<>();
 		Map<Node, Map<Side, List<Edge>>> aEdgesGroupedByNodeBySide = groupEdgesByNodeBySide(pEdges, pEdgeBoundStrategy);
-
-		for (Node aSharedNode: aEdgesGroupedByNodeBySide.keySet())
+		for (Node aAttachmentNode: aEdgesGroupedByNodeBySide.keySet()) //For each Node
 		{
-		    Map<Side, List<Edge>> aEdgesGroupedBySide = aEdgesGroupedByNodeBySide.get(aSharedNode);
+		    Map<Side, List<Edge>> aEdgesGroupedBySide = aEdgesGroupedByNodeBySide.get(aAttachmentNode);
 		    
-		    for (Side aSharedSide: aEdgesGroupedBySide.keySet())
+		    for (Side aAttachmentSide: aEdgesGroupedBySide.keySet()) //For each Side of each Node
 		    {	        
-		        List<Edge> aEdges = aEdgesGroupedBySide.get(aSharedSide);
+		        List<Edge> aEdges = aEdgesGroupedBySide.get(aAttachmentSide);
 		        
-		        CoordinateStrategy coordinateStrategy = aSharedSide.isHorizontal() ? useX : useY;
+		        CoordinateStrategy coordinateStrategy = aAttachmentSide.isHorizontal() ? useX : useY; //Whether Edge positions will be compared horizontally or vertically
 		        Comparator<Edge> positionComparator = new Comparator<Edge>()
 		        {
 					@Override
 					public int compare(Edge pEdge1, Edge pEdge2)
 					{
-						return coordinateStrategy.of(getBounds(getOtherNode(pEdge1, aSharedNode)).getCenter()) - 
-								coordinateStrategy.of(getBounds(getOtherNode(pEdge2, aSharedNode)).getCenter());
+						return coordinateStrategy.of(getBounds(getOtherNode(pEdge1, aAttachmentNode)).getCenter()) - 
+								coordinateStrategy.of(getBounds(getOtherNode(pEdge2, aAttachmentNode)).getCenter());
 					}
 		        };
 		        aEdges.sort(positionComparator);
-		        List<List<Edge>> edgesToMergeLists = groupEdgesToMerge(aEdges, pEdgeLabelStrategy);
-		        for (List<Edge> edgesToMergeList: edgesToMergeLists)
+		        List<EdgeGroup> edgesToMergeLists = groupEdgesToMerge(aEdges, pEdgeLabelStrategy);
+		        for (EdgeGroup edgesToMergeList: edgesToMergeLists) //For each group of Edges
 		        {
-		        	if(edgesToMergeList.size()>=pMinEdgeCount)
-					{ 	
-		        		Edge currentEdge = edgesToMergeList.get(0);
-		        		Side edgeDirection = attachedSide(currentEdge, currentEdge.start());
-						storeMergedEdges(edgeDirection, edgesToMergeList, pEdgeBoundStrategy);
-						mergedEdges.addAll(edgesToMergeList);
-					}
+		        	Point groupConnectionPoint = getConnectionPoint(edgesToMergeList, edgesToMergeLists, aAttachmentNode, aAttachmentSide);
+		        	if (edgesToMergeList.size()>1)
+		        	{
+		        		aSharedConnectionPoints.put(edgesToMergeList, groupConnectionPoint);
+		        		aMergedEdges.addAll(edgesToMergeList);
+		        	}
+		        	else {
+		        		Edge edge = edgesToMergeList.get(0);
+		        		if (aIndividualConnectionPoints.containsKey(edge))
+		        		{
+		        			aSharedConnectionPoints.put(edgesToMergeList, groupConnectionPoint);
+		        		}
+		        		else
+		        		{
+		        			aIndividualConnectionPoints.put(edge, groupConnectionPoint);
+		        		}
+		        	}
 		        }
 		    }
 		}
-		return mergedEdges;
 	}
 	
 	/**
@@ -285,6 +296,9 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	{
 		assert diagram().getType() == DiagramType.CLASS;
 		aEdgeStorage.clearStorage();
+		aMergedEdges.clear();
+		aSharedConnectionPoints.clear();
+		aIndividualConnectionPoints.clear();
 		layoutSegmentedEdges();
 		layoutDependencyEdges();
 		layoutSelfEdges();
@@ -297,14 +311,23 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	private void layoutSegmentedEdges()
 	{
 		assert diagram().getType() == DiagramType.CLASS;
-		List<Edge> edgesToProcess = diagram().edges().stream() //A list of all segmented edges in the diagram
+		List<Edge> allEdges = diagram().edges().stream() //A list of all segmented edges in the diagram
 				.filter(edge -> EdgePriority.isSegmented(edge))
 				.collect(toList());
 		
-		List<Edge> edgesMergedAtStart = mergeEdges(edgesToProcess, useStartNode, useStartLabel, 2);
-		edgesToProcess.removeAll(edgesMergedAtStart);
-		List<Edge> edgesMergedAtEnd = mergeEdges(edgesToProcess, useEndNode, useEndLabel, 1);
-		edgesToProcess.removeAll(edgesMergedAtEnd);
+		planConnectionPoints(allEdges, useStartNode, useStartLabel);
+		planConnectionPoints(allEdges, useEndNode, useEndLabel);
+		
+		for (EdgeGroup edgeGroup : aSharedConnectionPoints.keySet()) {
+			if (edgeGroup.shareStartNode())
+			{
+				storeMergedEdges(edgeGroup, useStartNode);
+			}
+			else
+			{
+				storeMergedEdges(edgeGroup, useEndNode);
+			}
+	    }
 	}
 	
 	/**
@@ -415,22 +438,19 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 	 * @param pEdgeBoundStrategy the strategy indicating whether the merging occurs at the start node or the end node
 	 * @pre pEdgesToMergeEnd.size() > 0
 	 */
-	private void storeMergedEdges(Side pDirection, List<Edge> pEdgesToMerge, EdgeBoundStrategy pEdgeBoundStrategy)
+	private void storeMergedEdges(EdgeGroup pEdgesToMerge, EdgeBoundStrategy pEdgeBoundStrategy)
 	{
 		assert pEdgesToMerge.size() > 0;
+		Edge currentEdge = pEdgesToMerge.get(0);
+		Side pDirection = attachedSide(currentEdge, currentEdge.start());
 		//Merged edges will share a common point (The point where the edges merge)
-		Point sharedPoint = getConnectionPoint(pEdgeBoundStrategy.of(pEdgesToMerge.get(0)), pEdgesToMerge.get(0), 
-				pEdgeBoundStrategy.getClass().equals(EndNodeStrategy.class) ? pDirection.mirrored() : pDirection);
-		//get the opposite point for each edge (The other point of the edge, where no merging occurs)
-		Map<Edge, Point> oppositePoints = new HashMap<Edge, Point>();
-		EdgeBoundStrategy pOppositeEdgeBoundStrategy = pEdgeBoundStrategy.getClass().equals(EndNodeStrategy.class) ? useStartNode : useEndNode;
-		for (Edge edge : pEdgesToMerge)
-		{
-			oppositePoints.put(edge, getConnectionPoint(pOppositeEdgeBoundStrategy.of(edge), edge, 
-					pEdgeBoundStrategy.getClass().equals(EndNodeStrategy.class) ? pDirection : pDirection.mirrored()));
-		}
+		Point sharedPoint = aSharedConnectionPoints.get(pEdgesToMerge);
+		List<Point> individualPoints = new ArrayList<>();
+	    for (Edge edge : pEdgesToMerge) {
+	        individualPoints.add(aIndividualConnectionPoints.get(edge));
+	    }
 		//Determine the position of the shared middle segment
-		Point closestOppositePoint = getClosestPoint(oppositePoints.values(), 
+		Point closestOppositePoint = getClosestPoint(individualPoints, 
 				pEdgeBoundStrategy.getClass().equals(EndNodeStrategy.class) ? pDirection : pDirection.mirrored());
 		int midLineCoordinate;
 		if(pDirection.isHorizontal())
@@ -447,11 +467,11 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 			EdgePath path;
 			if (pEdgeBoundStrategy.getClass().equals(EndNodeStrategy.class))
 			{
-				path = buildSegmentedEdgePath(pDirection, oppositePoints.get(edge), midLineCoordinate, sharedPoint);
+				path = buildSegmentedEdgePath(pDirection, aIndividualConnectionPoints.get(edge), midLineCoordinate, sharedPoint);
 			}
 			else
 			{
-				path = buildSegmentedEdgePath(pDirection, sharedPoint, midLineCoordinate, oppositePoints.get(edge));
+				path = buildSegmentedEdgePath(pDirection, sharedPoint, midLineCoordinate, aIndividualConnectionPoints.get(edge));
 			}
 			aEdgeStorage.store(edge, path);
 		}
@@ -921,92 +941,6 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 		}
 	}
 	
-	private int getCoordinateOfOtherNode(Edge pEdge, Node pNode, Side pAttachedSide)
-	{
-		CoordinateStrategy aCoordinateStrategy = pAttachedSide.isHorizontal() ? useX : useY;
-		return aCoordinateStrategy.of(getBounds(getOtherNode(pEdge, pNode)).getCenter());
-	}
-	
-	/**
-	 * Returns whether an integer is contained between a lower and upper bound.
-	 * @param pLowerBound 
-	 * @param pInt
-	 * @param pUpperBound
-	 * @return true if the integer is larger than the lower bound and smaller than the upper bound
-	 */
-	private boolean isBetween(int pLowerBound, int pInt, int pUpperBound)
-	{
-		return pLowerBound < pInt && pInt < pUpperBound;
-	}
-	
-	/**
-	 * Returns whether there are any edges of a different priority connected to pNode in between pEdge1 and pEdge2.
-	 * @param pEdge1 an edge of interest
-	 * @param pEdge2 another edge of interest
-	 * @param pNode the node on which pEdge1 and pEdge2 are attached
-	 * @return true if there are no edges on pNode which are attached in between pEdge1 and pEdge2. False otherwise
-	 * @pre pEdge1.getStart() == pNode || pEdge1.getEnd() == pNode
-	 * @pre pEdge2.getStart() == pNode || pEdge2.getEnd() == pNode
-	 * @pre attachedSide(pEdge1, pNode) == attachedSide(pEdge2, pNode)
-	 * @pre priorityOf(pEdge1) == priorityOf(pEdge2)
- 	 */
-	private boolean noDifferentEdgesBetween(Edge pEdge1, Edge pEdge2, Node pNode)
-	{
-		assert pEdge1.start() == pNode || pEdge1.end() == pNode;
-		assert pEdge2.start() == pNode || pEdge2.end() == pNode;
-		assert attachedSide(pEdge1, pNode) == attachedSide(pEdge2, pNode);
-		assert priorityOf(pEdge1) == priorityOf(pEdge2);
-		
-		Side aAttachedSide = attachedSide(pEdge1, pNode);
-		
-		int aCoordinate1 = getCoordinateOfOtherNode(pEdge1, pNode, aAttachedSide);
-		int aCoordinate2 = getCoordinateOfOtherNode(pEdge2, pNode, aAttachedSide);
-		
-		int aUpperBound = Math.max(aCoordinate1, aCoordinate2);
-		int aLowerBound = Math.min(aCoordinate1, aCoordinate2);
-		
-		if (pEdge1.equals(pEdge2))
-		{
-			return true;
-		}
-		return diagram().edges().stream()
-				.filter(edge -> edge.start() == pNode || edge.end() == pNode)
-				.filter(edge -> attachedSide(edge, pNode) == aAttachedSide)
-				.filter(edge -> priorityOf(edge) != priorityOf(pEdge1) || edge.equals(pEdge1) || edge.equals(pEdge2))
-				.filter(edge -> isBetween(aLowerBound, getCoordinateOfOtherNode(edge, pNode, aAttachedSide), aUpperBound))
-				.filter(edge -> !edge.equals(pEdge1))
-				.filter(edge -> !edge.equals(pEdge2))
-				.collect(toList()).isEmpty();
-	}
-	
-	/**
-	 * Returns whether the center points of pNode1 and pNode2 are both on the same side relative to the center point of pCommonNode.
-	 * @param pNode1 a node in the diagram
-	 * @param pNode2 another node in the diagram
-	 * @param pCommonNode aNode which has edges which connect to both pNode1 and pNode2
-	 * @param pAttachedSide the side of pCommonNode on which the edges from pNode1 and pNode2 connect
-	 * @return true if the center points of pNode1 and pNode2 are both above, below, to the left, or to the right 
-	 *     of the center point of pCommonNode. False otherwise.
-	 * @pre pAttachedSide.isCardinal()
-	 */
-	private boolean nodesOnSameSideOfCommonNode(Node pNode1, Node pNode2, Node pCommonNode, Side pAttachedSide)
-	{
-		//Compare positions of pNode1 and pNode2 to the position of pCommonNode
-		Point node1Center = getBounds(pNode1).getCenter();
-		Point node2Center = getBounds(pNode2).getCenter();
-		Point commonNodeCenter = getBounds(pCommonNode).getCenter();
-		if(pAttachedSide.isHorizontal())//then compare X-coordinates
-		{
-			return node1Center.getX() <= commonNodeCenter.getX() && node2Center.getX() <= commonNodeCenter.getX() ||
-					node1Center.getX() >= commonNodeCenter.getX() && node2Center.getX() >= commonNodeCenter.getX();
-		}
-		else//compare y-coordinates
-		{
-			return node1Center.getY() <= commonNodeCenter.getY() && node2Center.getY() <= commonNodeCenter.getY() ||
-					node1Center.getY() >= commonNodeCenter.getY() && node2Center.getY() >= commonNodeCenter.getY();
-		}
-	}
-	
 	/**
 	 * Gets the connection point for pEdge on the pAttachmentSide of pNode. 
 	 * Checks with the diagram's EdgeStorage to find the closest available 
@@ -1043,6 +977,33 @@ public final class ClassDiagramRenderer extends AbstractDiagramRenderer
 		//If no connection point was available, return the point at NodeIndex MINUS_FOUR or PLUS_FOUR	
 		int maxOrdinal = 4 + ( maxIndex * indexSign );
 		return NodeIndex.values()[maxOrdinal].toPoint(faceOfNode, pAttachmentSide); 
+	}
+	
+	private Point getConnectionPoint(EdgeGroup pEdgeGroup, List<EdgeGroup> pEdgeGroups, Node pNode, Side pAttachmentSide)
+	{
+		assert pEdgeGroups.contains(pEdgeGroup);
+		//North and South node sides have connection point indices: -4 ...0... +4
+		//East and West node sides have connection points indices: -2 ...0... +2
+		int maxIndex = 4; 
+		if( pAttachmentSide.isVertical() )
+		{
+			maxIndex = 2; 
+		}
+		int connectionPointIndex = pEdgeGroups.indexOf(pEdgeGroup) - pEdgeGroups.size()/2; //Integer representation of a NodeIndex
+		
+		if (connectionPointIndex < -maxIndex)
+		{
+			connectionPointIndex = -maxIndex;
+		}
+		if (connectionPointIndex > maxIndex)
+		{
+			connectionPointIndex = maxIndex;
+		}
+		int ordinal = connectionPointIndex+maxIndex; //The index associating an Integer (Ex: -3) to a NodeIndex (Ex: MINUS_THREE)
+		NodeIndex aNodeIndex = NodeIndex.values()[ordinal];
+		Line faceOfNode = getFace(pNode, pAttachmentSide);
+		Point connectionPoint = aNodeIndex.toPoint(faceOfNode, pAttachmentSide); 
+		return connectionPoint;
 	}
 	
 	/**
